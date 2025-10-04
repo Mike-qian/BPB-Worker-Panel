@@ -1,6 +1,6 @@
 import { Authenticate, generateJWTToken, resetPassword } from "#auth";
 import { getClashNormalConfig, getClashWarpConfig } from "#configs/clash";
-import { extractWireguardParams } from "#configs/utils";
+import { extractWireguardParams, getConfigAddresses, generateWsPath, generateRemark } from "#configs/utils";
 import { getSingBoxCustomConfig, getSingBoxWarpConfig } from "#configs/sing-box";
 import { getXrayCustomConfigs, getXrayWarpConfigs } from "#configs/xray";
 import { getDataset, updateDataset } from "#kv";
@@ -135,9 +135,62 @@ export async function handleSubscriptions(request, env) {
                     break;
             }
 
+        case `/sub/legacy/${subPath}`:
+            return await getLegacySubscriptions(env);
+
         default:
             return await fallback(request);
     }
+}
+
+async function getLegacySubscriptions(env) {
+    const Addresses = await getConfigAddresses(settings.cleanIPs, settings.VLTRenableIPv6, settings.customCdnAddrs, false);
+    const totalPorts = settings.ports.filter(port => httpConfig.defaultHttpsPorts.includes(port));
+    
+    let protocols = [];
+    if (settings.VLConfigs) protocols.push(atob('VkxFU1M='));
+    if (settings.TRConfigs) protocols.push(atob('VHJvamFu'));
+    
+    let subscriptionLinks = [];
+    
+    for (const protocol of protocols) {
+        let protocolIndex = 1;
+        for (const port of totalPorts) {
+            for (const addr of Addresses) {
+                const isCustomAddr = settings.customCdnAddrs.includes(addr);
+                const configType = isCustomAddr ? 'C' : '';
+                const sni = isCustomAddr ? settings.customCdnSni : httpConfig.hostName;
+                const host = isCustomAddr ? settings.customCdnHost : httpConfig.hostName;
+                const remark = generateRemark(protocolIndex, port, addr, settings.cleanIPs, protocol, configType);
+                
+                if (protocol === atob('VkxFU1M=')) {
+                    // Generate VLESS link
+                    const path = `${generateWsPath("vl")}?ed=2560`;
+                    const vlessLink = `vless://${globalConfig.userID}@${addr}:${port}?encryption=none&flow=&security=tls&sni=${encodeURIComponent(sni)}&type=ws&host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}#${encodeURIComponent(remark)}`;
+                    subscriptionLinks.push(vlessLink);
+                } else if (protocol === atob('VHJvamFu')) {
+                    // Generate Trojan link
+                    const path = `${generateWsPath("tr")}?ed=2560`;
+                    const trojanLink = `trojan://${globalConfig.TrPass}@${addr}:${port}?security=tls&sni=${encodeURIComponent(sni)}&type=ws&host=${encodeURIComponent(host)}&path=${encodeURIComponent(path)}#${encodeURIComponent(remark)}`;
+                    subscriptionLinks.push(trojanLink);
+                }
+                
+                protocolIndex++;
+            }
+        }
+    }
+    
+    // Combine all links with newlines
+    const combinedLinks = subscriptionLinks.join('\n');
+    
+    return new Response(combinedLinks, {
+        status: 200,
+        headers: {
+            'Content-Type': 'text/plain;charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'CDN-Cache-Control': 'no-store'
+        }
+    });
 }
 
 async function updateSettings(request, env) {
